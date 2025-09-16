@@ -62,6 +62,17 @@
         const WORLD_SIZE = 2048;
         const AVATAR_SIZE = 32; // Avatar size in pixels
         
+        // Movement system
+        const pressedKeys = new Set();
+        const keyToDirection = {
+            'ArrowUp': 'up',
+            'ArrowDown': 'down',
+            'ArrowLeft': 'left',
+            'ArrowRight': 'right'
+        };
+        let movementInterval = null;
+        const MOVEMENT_INTERVAL = 50; // Send move command every 50ms for smooth movement
+        
         // WebSocket connection to game server
         function connectToGameServer() {
             gameSocket = new WebSocket('wss://codepath-mmorg.onrender.com');
@@ -295,8 +306,101 @@
             ctx.fillText(username, x, y);
         }
         
+        // Send movement command to server
+        function sendMoveCommand(direction) {
+            if (gameSocket && gameSocket.readyState === WebSocket.OPEN) {
+                const moveMessage = {
+                    action: "move",
+                    direction: direction
+                };
+                gameSocket.send(JSON.stringify(moveMessage));
+            }
+        }
+        
+        // Send stop command to server
+        function sendStopCommand() {
+            if (gameSocket && gameSocket.readyState === WebSocket.OPEN) {
+                const stopMessage = {
+                    action: "stop"
+                };
+                gameSocket.send(JSON.stringify(stopMessage));
+            }
+        }
+        
+        // Start continuous movement
+        function startMovement() {
+            if (movementInterval) return; // Already moving
+            
+            movementInterval = setInterval(() => {
+                if (pressedKeys.size > 0) {
+                    // Send move command for the first pressed key (prioritize first key pressed)
+                    const firstKey = Array.from(pressedKeys)[0];
+                    const direction = keyToDirection[firstKey];
+                    sendMoveCommand(direction);
+                }
+            }, MOVEMENT_INTERVAL);
+        }
+        
+        // Stop continuous movement
+        function stopMovement() {
+            if (movementInterval) {
+                clearInterval(movementInterval);
+                movementInterval = null;
+            }
+            sendStopCommand();
+        }
+        
+        // Handle key down events
+        function handleKeyDown(event) {
+            const key = event.key;
+            
+            // Only handle arrow keys
+            if (!keyToDirection.hasOwnProperty(key)) return;
+            
+            // Prevent default browser behavior (scrolling)
+            event.preventDefault();
+            
+            // If this key wasn't already pressed, add it and start movement
+            if (!pressedKeys.has(key)) {
+                pressedKeys.add(key);
+                
+                // If this is the first key pressed, start continuous movement
+                if (pressedKeys.size === 1) {
+                    startMovement();
+                }
+            }
+        }
+        
+        // Handle key up events
+        function handleKeyUp(event) {
+            const key = event.key;
+            
+            // Only handle arrow keys
+            if (!keyToDirection.hasOwnProperty(key)) return;
+            
+            // Prevent default browser behavior
+            event.preventDefault();
+            
+            // Remove key from pressed set
+            pressedKeys.delete(key);
+            
+            // If no movement keys are pressed, stop movement
+            if (pressedKeys.size === 0) {
+                stopMovement();
+            }
+        }
+        
+        // Setup keyboard event listeners
+        function setupKeyboardControls() {
+            document.addEventListener('keydown', handleKeyDown);
+            document.addEventListener('keyup', handleKeyUp);
+        }
+        
         // Connect to game server when page loads
         connectToGameServer();
+        
+        // Setup keyboard controls
+        setupKeyboardControls();
     </script>
 </body>
 </html>
