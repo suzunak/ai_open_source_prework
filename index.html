@@ -48,6 +48,255 @@
             ctx.textAlign = 'center';
             ctx.fillText('World map failed to load', canvas.width / 2, canvas.height / 2);
         };
+        
+        // Game state variables
+        let gameSocket = null;
+        let playerData = null;
+        let allPlayers = {};
+        let allAvatars = {};
+        let myPlayerId = null;
+        
+        // Viewport management
+        let viewportX = 0;
+        let viewportY = 0;
+        const WORLD_SIZE = 2048;
+        const AVATAR_SIZE = 32; // Avatar size in pixels
+        
+        // WebSocket connection to game server
+        function connectToGameServer() {
+            gameSocket = new WebSocket('wss://codepath-mmorg.onrender.com');
+            
+            gameSocket.onopen = function(event) {
+                console.log('Connected to game server');
+                
+                // Send join game message
+                const joinMessage = {
+                    action: "join_game",
+                    username: "Suzuna"
+                };
+                
+                gameSocket.send(JSON.stringify(joinMessage));
+            };
+            
+            gameSocket.onmessage = function(event) {
+                const message = JSON.parse(event.data);
+                console.log('Received:', message);
+                
+                // Handle different message types
+                switch(message.action) {
+                    case 'join_game':
+                        if (message.success) {
+                            handleJoinGameResponse(message);
+                        } else {
+                            console.error('Join game failed:', message.error);
+                        }
+                        break;
+                    case 'player_joined':
+                        handlePlayerJoined(message);
+                        break;
+                    case 'players_moved':
+                        handlePlayersMoved(message);
+                        break;
+                    case 'player_left':
+                        handlePlayerLeft(message);
+                        break;
+                    default:
+                        console.log('Unknown message type:', message.action);
+                }
+            };
+            
+            gameSocket.onerror = function(error) {
+                console.error('WebSocket error:', error);
+            };
+            
+            gameSocket.onclose = function(event) {
+                console.log('Connection closed:', event.code, event.reason);
+            };
+        }
+        
+        // Handle join game response
+        function handleJoinGameResponse(message) {
+            myPlayerId = message.playerId;
+            allPlayers = message.players;
+            allAvatars = message.avatars;
+            
+            console.log('Joined game! Player ID:', myPlayerId);
+            console.log('All players:', allPlayers);
+            console.log('All avatars:', allAvatars);
+            
+            // Trigger a redraw with the new player data
+            redrawGame();
+        }
+        
+        // Handle new player joined
+        function handlePlayerJoined(message) {
+            allPlayers[message.player.id] = message.player;
+            allAvatars[message.avatar.name] = message.avatar;
+            console.log('Player joined:', message.player.username);
+            redrawGame();
+        }
+        
+        // Handle players moved
+        function handlePlayersMoved(message) {
+            Object.assign(allPlayers, message.players);
+            redrawGame();
+        }
+        
+        // Handle player left
+        function handlePlayerLeft(message) {
+            delete allPlayers[message.playerId];
+            console.log('Player left:', message.playerId);
+            redrawGame();
+        }
+        
+        // Update viewport to center on player
+        function updateViewport() {
+            if (!myPlayerId || !allPlayers[myPlayerId]) return;
+            
+            const myPlayer = allPlayers[myPlayerId];
+            const centerX = canvas.width / 2;
+            const centerY = canvas.height / 2;
+            
+            // Calculate desired viewport position to center the player
+            let desiredViewportX = myPlayer.x - centerX;
+            let desiredViewportY = myPlayer.y - centerY;
+            
+            // Clamp viewport to world bounds
+            viewportX = Math.max(0, Math.min(desiredViewportX, WORLD_SIZE - canvas.width));
+            viewportY = Math.max(0, Math.min(desiredViewportY, WORLD_SIZE - canvas.height));
+        }
+        
+        // Redraw the entire game
+        function redrawGame() {
+            // Update viewport to center on player
+            updateViewport();
+            
+            // Clear canvas
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // Draw world map with viewport offset
+            if (worldImage.complete) {
+                ctx.drawImage(
+                    worldImage, 
+                    viewportX, viewportY, canvas.width, canvas.height,  // Source rectangle (what part of world to show)
+                    0, 0, canvas.width, canvas.height  // Destination rectangle (where to draw on canvas)
+                );
+            }
+            
+            // Draw all players
+            drawAllPlayers();
+        }
+        
+        // Cache for loaded avatar images
+        const avatarImageCache = {};
+        
+        // Load avatar image from base64 data
+        function loadAvatarImage(base64Data) {
+            if (avatarImageCache[base64Data]) {
+                return avatarImageCache[base64Data];
+            }
+            
+            const img = new Image();
+            img.src = base64Data;
+            avatarImageCache[base64Data] = img;
+            return img;
+        }
+        
+        // Draw all players on the map
+        function drawAllPlayers() {
+            Object.values(allPlayers).forEach(player => {
+                drawPlayer(player);
+            });
+        }
+        
+        // Draw a single player
+        function drawPlayer(player) {
+            // Convert world coordinates to canvas coordinates
+            const canvasX = player.x - viewportX;
+            const canvasY = player.y - viewportY;
+            
+            // Only draw if player is visible in viewport
+            if (canvasX < -AVATAR_SIZE || canvasX > canvas.width + AVATAR_SIZE ||
+                canvasY < -AVATAR_SIZE || canvasY > canvas.height + AVATAR_SIZE) {
+                return;
+            }
+            
+            // Get player's avatar data
+            const avatarData = allAvatars[player.avatar];
+            if (!avatarData) {
+                // Draw placeholder if no avatar data
+                drawPlayerPlaceholder(canvasX, canvasY, player.username);
+                return;
+            }
+            
+            // Get the correct frame based on facing direction and animation frame
+            let frames = avatarData.frames[player.facing];
+            if (!frames && player.facing === 'west') {
+                // West direction uses flipped east frames
+                frames = avatarData.frames['east'];
+            }
+            
+            if (!frames || frames.length === 0) {
+                drawPlayerPlaceholder(canvasX, canvasY, player.username);
+                return;
+            }
+            
+            // Get the current animation frame (0-2)
+            const frameIndex = Math.max(0, Math.min(player.animationFrame || 0, frames.length - 1));
+            const frameData = frames[frameIndex];
+            
+            // Load and draw the avatar image
+            const avatarImg = loadAvatarImage(frameData);
+            
+            if (avatarImg.complete) {
+                // Calculate avatar position (center the avatar on the player position)
+                const avatarX = canvasX - AVATAR_SIZE / 2;
+                const avatarY = canvasY - AVATAR_SIZE / 2;
+                
+                // Draw avatar with proper aspect ratio
+                if (player.facing === 'west') {
+                    // Flip horizontally for west-facing players
+                    ctx.save();
+                    ctx.scale(-1, 1);
+                    ctx.drawImage(avatarImg, -avatarX - AVATAR_SIZE, avatarY, AVATAR_SIZE, AVATAR_SIZE);
+                    ctx.restore();
+                } else {
+                    ctx.drawImage(avatarImg, avatarX, avatarY, AVATAR_SIZE, AVATAR_SIZE);
+                }
+            }
+            
+            // Draw username label
+            drawUsernameLabel(canvasX, canvasY - AVATAR_SIZE / 2 - 5, player.username);
+        }
+        
+        // Draw a placeholder for players without avatar data
+        function drawPlayerPlaceholder(x, y, username) {
+            // Draw a simple colored circle
+            ctx.fillStyle = '#ff6b6b';
+            ctx.beginPath();
+            ctx.arc(x, y, AVATAR_SIZE / 2, 0, 2 * Math.PI);
+            ctx.fill();
+            
+            // Draw username label
+            drawUsernameLabel(x, y - AVATAR_SIZE / 2 - 5, username);
+        }
+        
+        // Draw username label above player
+        function drawUsernameLabel(x, y, username) {
+            ctx.fillStyle = '#ffffff';
+            ctx.strokeStyle = '#000000';
+            ctx.lineWidth = 2;
+            ctx.font = '12px Arial';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'bottom';
+            
+            // Draw text with outline for better visibility
+            ctx.strokeText(username, x, y);
+            ctx.fillText(username, x, y);
+        }
+        
+        // Connect to game server when page loads
+        connectToGameServer();
     </script>
 </body>
 </html>
