@@ -35,7 +35,18 @@
         };
         
         // Load the world map image
-        worldImage.src = 'world.jpg';
+        worldImage.src = 'open_grass_2048x2048.png';
+        
+        // Load the coin image
+        const coinImage = new Image();
+        coinImage.onload = function() {
+            console.log('Coin image loaded successfully!');
+            console.log('Coin dimensions:', coinImage.naturalWidth, 'x', coinImage.naturalHeight);
+        };
+        coinImage.onerror = function() {
+            console.error('Failed to load coin image');
+        };
+        coinImage.src = 'dollar.png';
         
         // Handle any loading errors
         worldImage.onerror = function() {
@@ -60,7 +71,7 @@
         let viewportX = 0;
         let viewportY = 0;
         const WORLD_SIZE = 2048;
-        const AVATAR_SIZE = 32; // Avatar size in pixels
+        const AVATAR_SIZE = 48; // Avatar size in pixels
         
         // Movement system
         const pressedKeys = new Set();
@@ -72,6 +83,12 @@
         };
         let movementInterval = null;
         const MOVEMENT_INTERVAL = 50; // Send move command every 50ms for smooth movement
+        
+        // Coin system
+        const coins = [];
+        const MAX_COINS = 20;
+        const COIN_SIZE = 16; // Coin size in pixels
+        let myCoinCount = 0;
         
         // WebSocket connection to game server
         function connectToGameServer() {
@@ -135,6 +152,9 @@
             console.log('All players:', allPlayers);
             console.log('All avatars:', allAvatars);
             
+            // Generate coins when joining the game
+            generateCoins();
+            
             // Trigger a redraw with the new player data
             redrawGame();
         }
@@ -194,6 +214,12 @@
                 );
             }
             
+            // Draw all coins
+            drawCoins();
+            
+            // Check coin collisions
+            checkCoinCollisions();
+            
             // Draw all players
             drawAllPlayers();
         }
@@ -211,6 +237,87 @@
             img.src = base64Data;
             avatarImageCache[base64Data] = img;
             return img;
+        }
+        
+        // Generate random coins
+        function generateCoins() {
+            coins.length = 0; // Clear existing coins
+            
+            for (let i = 0; i < MAX_COINS; i++) {
+                const coin = {
+                    x: Math.random() * (WORLD_SIZE - COIN_SIZE),
+                    y: Math.random() * (WORLD_SIZE - COIN_SIZE),
+                    collected: false,
+                    id: i
+                };
+                coins.push(coin);
+            }
+            
+            console.log(`Generated ${MAX_COINS} coins randomly across the world`);
+        }
+        
+        // Draw all coins
+        function drawCoins() {
+            coins.forEach(coin => {
+                if (!coin.collected) {
+                    // Convert world coordinates to canvas coordinates
+                    const canvasX = coin.x - viewportX;
+                    const canvasY = coin.y - viewportY;
+                    
+                    // Only draw if coin is visible in viewport
+                    if (canvasX > -COIN_SIZE && canvasX < canvas.width + COIN_SIZE &&
+                        canvasY > -COIN_SIZE && canvasY < canvas.height + COIN_SIZE) {
+                        
+                        if (coinImage.complete) {
+                            // Draw coin image
+                            ctx.drawImage(coinImage, canvasX, canvasY, COIN_SIZE, COIN_SIZE);
+                        } else {
+                            // Draw placeholder if image not loaded
+                            ctx.fillStyle = '#FFD700';
+                            ctx.beginPath();
+                            ctx.arc(canvasX + COIN_SIZE/2, canvasY + COIN_SIZE/2, COIN_SIZE/2, 0, 2 * Math.PI);
+                            ctx.fill();
+                        }
+                    }
+                }
+            });
+        }
+        
+        // Check coin collisions
+        function checkCoinCollisions() {
+            if (!myPlayerId || !allPlayers[myPlayerId]) return;
+            
+            const myPlayer = allPlayers[myPlayerId];
+            
+            coins.forEach(coin => {
+                if (!coin.collected) {
+                    // Calculate distance between player and coin
+                    const distance = Math.sqrt(
+                        Math.pow(myPlayer.x - coin.x, 2) + 
+                        Math.pow(myPlayer.y - coin.y, 2)
+                    );
+                    
+                    // If player is close enough to coin, collect it
+                    if (distance < (AVATAR_SIZE + COIN_SIZE) / 2) {
+                        coin.collected = true;
+                        myCoinCount++;
+                        console.log(`Coin collected! Total coins: ${myCoinCount}`);
+                    }
+                }
+            });
+            
+            // Check if all coins are collected and respawn if needed
+            checkCoinRespawn();
+        }
+        
+        // Check if all coins are collected and respawn them
+        function checkCoinRespawn() {
+            const collectedCoins = coins.filter(coin => coin.collected).length;
+            
+            if (collectedCoins >= MAX_COINS) {
+                console.log('All coins collected! Respawning 20 new coins...');
+                generateCoins();
+            }
         }
         
         // Draw all players on the map
@@ -277,7 +384,8 @@
             }
             
             // Draw username label
-            drawUsernameLabel(canvasX, canvasY - AVATAR_SIZE / 2 - 5, player.username);
+            const isMyPlayer = player.id === myPlayerId;
+            drawUsernameLabel(canvasX, canvasY - AVATAR_SIZE / 2 - 5, player.username, isMyPlayer);
         }
         
         // Draw a placeholder for players without avatar data
@@ -293,7 +401,7 @@
         }
         
         // Draw username label above player
-        function drawUsernameLabel(x, y, username) {
+        function drawUsernameLabel(x, y, username, isMyPlayer = false) {
             ctx.fillStyle = '#ffffff';
             ctx.strokeStyle = '#000000';
             ctx.lineWidth = 2;
@@ -301,9 +409,21 @@
             ctx.textAlign = 'center';
             ctx.textBaseline = 'bottom';
             
-            // Draw text with outline for better visibility
+            // Draw username
             ctx.strokeText(username, x, y);
             ctx.fillText(username, x, y);
+            
+            // Draw coin counter for my player
+            if (isMyPlayer && myCoinCount > 0) {
+                ctx.font = '10px Arial';
+                ctx.fillStyle = '#FFD700';
+                ctx.strokeStyle = '#000000';
+                ctx.lineWidth = 1;
+                
+                const coinText = `💰 ${myCoinCount}`;
+                ctx.strokeText(coinText, x, y - 15);
+                ctx.fillText(coinText, x, y - 15);
+            }
         }
         
         // Send movement command to server
